@@ -1,13 +1,9 @@
 # 代码贡献指南
-需要已安装 `Node.js` 及 `Typescript`
+需要已安装 `Node.js`, `pnpm` 及 `TypeScript`
 
 ## 安装依赖项
 ```powershell
-yarn
-```
-或者
-```powershell
-npm install
+pnpm install
 ```
 
 ## 添加其他数据源
@@ -34,6 +30,16 @@ export const sourceMappings = {
   'thb-wiki': thbWiki,
   'xxx': xxx,
 } as { [type: string]: MetadataSource }
+```
+最后在 `src/cli/options.ts` 中添加选项:
+```TypeScript
+.option('source', {
+  alias: 's',
+  type: 'string',
+  default: 'thb-wiki',
+  choices: ['thb-wiki', 'doujin-meta', 'local-mp3', 'local-json', 'xxx'],
+  description: '设置数据源',
+})
 ```
 
 ## 添加其他文件类型支持
@@ -62,18 +68,17 @@ export const writerMappings = {
 
 ## 编译
 ```powershell
-tsc
+pnpm watch
 ```
 
 ## 本地版本
-由于 yarn 不支持 global link, 这里只能用 npm.
 
 安装:
 ```powershell
-npm link
+pnpm link --global
 ```
 
 卸载:
 ```powershell
-npm uninstall -g touhou-tagger
+pnpm remove --global touhou-tagger
 ```

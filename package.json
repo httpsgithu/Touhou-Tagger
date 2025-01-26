@@ -1,6 +1,6 @@
 {
   "name": "touhou-tagger",
-  "version": "1.4.2",
+  "version": "1.11.5",
   "description": "从 THBWiki 自动填写东方 Project CD 曲目信息.",
   "main": "dist/core/index.js",
   "bin": {
@@ -8,7 +8,10 @@
   },
   "scripts": {
     "start": "node dist/cli/index.js",
-    "prepublishOnly": "node scripts/prepublish-only.js"
+    "watch": "tsc --watch --sourceMap",
+    "lint": "eslint . --ext .cjs,.ts,.vue",
+    "eslint-fix": "eslint . --ext .cjs,.ts,.vue --fix",
+    "build": "tsc"
   },
   "repository": {
     "type": "git",
@@ -28,18 +31,36 @@
   },
   "homepage": "https://github.com/the1812/Touhou-Tagger#readme",
   "dependencies": {
-    "axios": "^0.19.0",
-    "flac-metadata": "^0.1.1",
+    "@squoosh/lib": "0.5.3",
+    "axios": "^1.7.9",
+    "flac-tagger": "^1.0.7",
+    "fuse.js": "^6.6.2",
+    "glob": "^10.2.7",
     "image-type": "^4.1.0",
     "imageinfo": "^1.0.4",
-    "jsdom": "^19.0.0",
-    "musicgenres-json": "^1.0.2",
-    "ora": "^4.0.3",
-    "yargs": "^17.4.1"
+    "linkedom": "^0.16.4",
+    "node-id3": "^0.2.3",
+    "ora": "^5.4.1",
+    "yargs": "^17.5.1"
   },
   "devDependencies": {
-    "@types/jsdom": "^16.2.13",
-    "@types/node": "^12.7.5",
-    "@types/yargs": "^17.0.10"
+    "@the1812/eslint-config": "^1.2.0",
+    "@types/node": "^18",
+    "@types/yargs": "^17.0.12",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-import": "^2.29.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "prettier": "3.1.0",
+    "typescript": "^5.3.2"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "node-id3@0.2.3": "patches/node-id3@0.2.3.patch",
+      "@squoosh/lib@0.5.3": "patches/@squoosh__lib@0.5.3.patch"
+    }
   }
 }

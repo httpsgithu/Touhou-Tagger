@@ -3,19 +3,26 @@
     "ALBUMARTIST",
     "ALBUMSORT",
     "DISCNUMBER",
+    "Doujin",
     "doujininfo",
     "flac",
+    "formatversion",
     "imageinfo",
     "linkedom",
     "Matthiola",
     "metadatas",
+    "mozjpeg",
     "musicgenres",
     "ogmusic",
+    "opensearch",
     "ORIGINALYEAR",
     "postprocess",
     "promisify",
+    "squoosh",
     "STREAMINFO",
+    "thbwiki",
     "thtag",
+    "thwiki",
     "TLMC",
     "touhou",
     "TRACKNUMBER",
@@ -24,5 +31,11 @@
     "Violetium",
     "Vorbis",
     "wikitable"
-  ]
+  ],
+  "[javascript]": {
+    "editor.defaultFormatter": "dbaeumer.vscode-eslint"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "dbaeumer.vscode-eslint"
+  }
 }

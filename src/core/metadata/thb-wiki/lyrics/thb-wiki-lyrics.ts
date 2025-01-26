@@ -1,5 +1,5 @@
-import Axios, { AxiosResponse } from 'axios'
-import { JSDOM } from 'jsdom'
+import axios, { AxiosResponse } from 'axios'
+import { parseHTML } from 'linkedom'
 import { MetadataConfig } from '../../../core-config'
 import { log } from '../../../debug'
 import { getLyricParser, LyricParser } from './lyric-parser'
@@ -22,36 +22,42 @@ const downloadLrcLyrics = async (title: string, index: number, config: MetadataC
   log(url)
   let response: AxiosResponse<string>
   try {
-    response = await Axios.get(url, { responseType: 'text', timeout: config.timeout * 1000 })
+    response = await axios.get(url, { responseType: 'text', timeout: config.timeout * 1000 })
     return {
       lyric: response.data,
-      lyricLanguage: undefined
+      lyricLanguage: undefined,
     }
   } catch (error) {
     console.error(`下载歌词失败: ${url}`)
     return {
       lyric: '',
-      lyricLanguage: undefined
+      lyricLanguage: undefined,
     }
   }
 }
 const lyricDocumentCache: { url: string; document: Document }[] = []
-export const downloadLyrics = async (url: string, title: string, config: Required<MetadataConfig>) => {
+export const downloadLyrics = async (
+  url: string,
+  title: string,
+  config: Required<MetadataConfig>,
+) => {
   log(`\n下载歌词中: ${title}`)
   let document = lyricDocumentCache.find(it => it.url === url)?.document
   if (!document) {
-    const response = await Axios.get(url, { timeout: config.timeout * 1000 })
-    const dom = new JSDOM(response.data)
-    document = dom.window.document
+    const response = await axios.get(url, { timeout: config.timeout * 1000 })
+    document = parseHTML(response.data).window.document
     lyricDocumentCache.push({ url, document })
     if (lyricDocumentCache.length > config.lyric.maxCacheSize) {
-      lyricDocumentCache.pop()
+      lyricDocumentCache.shift()
     }
   }
-  let table: HTMLTableElement
-  const tables = [...document.querySelectorAll('.wikitable[class*="tt-type-lyric"]')] as HTMLTableElement[]
+  let lyricTable: HTMLTableElement
+  const tables = [
+    ...document.querySelectorAll('.wikitable[class*="tt-type-lyric"]'),
+  ] as HTMLTableElement[]
   log('tables length: ', tables.length)
-  if (tables.length > 1) { // 歌词可能有多个版本
+  if (tables.length > 1) {
+    // 歌词可能有多个版本
     const titles = tables.map(table => {
       const t = table.parentElement.title
       return t.substring(0, t.length - 1) // 移除最后一个'版'字
@@ -62,21 +68,22 @@ export const downloadLyrics = async (url: string, title: string, config: Require
     const matchIndex = [...titles].reverse().findIndex(t => title.includes(t))
     log(matchIndex, tables.length - matchIndex - 1)
     if (matchIndex !== -1) {
-      table = tables[tables.length - matchIndex - 1]
+      lyricTable = tables[tables.length - matchIndex - 1]
     } else {
-      [table] = tables
+      lyricTable = tables[0]
     }
-    log(table)
+    log(lyricTable)
   } else {
-    [table] = tables
+    lyricTable = tables[0]
   }
-  lyricParser = getLyricParser(table, config.lyric)
+  lyricParser = getLyricParser(lyricTable, config.lyric)
   switch (config.lyric.output) {
-    case 'metadata':
-    default:
-      return await downloadMetadataLyrics()
-    case 'lrc':
+    case 'lrc': {
       const originalTitle = document.querySelector('.firstHeading').textContent.replace('歌词:', '')
-      return await downloadLrcLyrics(originalTitle, tables.indexOf(table), config)
+      return downloadLrcLyrics(originalTitle, tables.indexOf(lyricTable), config)
+    }
+    case 'metadata': // fallthrough
+    default:
+      return downloadMetadataLyrics()
   }
 }

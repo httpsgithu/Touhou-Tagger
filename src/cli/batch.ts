@@ -1,11 +1,15 @@
-import { readdirSync } from 'fs'
 import { join } from 'path'
+import type { Options as OraOptions, Ora } from 'ora'
+import { readdir } from 'fs/promises'
 import { log } from '../core/debug'
 import { getDefaultAlbumName } from './default-album-name'
-import { cliOptions, metadataConfig } from './options'
+import { asyncFlatMap } from './helper'
 
-const readFolder = (folder: string, depth: number): { name: string; path: string }[] => {
-  const currentSubFolders = readdirSync(folder, { withFileTypes: true })
+const readFolder = async (
+  folder: string,
+  depth: number,
+): Promise<{ name: string; path: string }[]> => {
+  const currentSubFolders = (await readdir(folder, { withFileTypes: true }))
     .filter(dir => dir.isDirectory())
     .map(dir => ({
       name: dir.name,
@@ -14,28 +18,39 @@ const readFolder = (folder: string, depth: number): { name: string; path: string
   if (depth <= 1) {
     return currentSubFolders
   }
-  return currentSubFolders.flatMap(subFolder => readFolder(join(folder, subFolder.name), depth - 1))
+  const allSubFolders = await asyncFlatMap(currentSubFolders, subFolder =>
+    readFolder(join(folder, subFolder.name), depth - 1),
+  )
+  return allSubFolders
 }
-export const runBatchTagger = async (folder: string, depth: number) => {
-  const albums = readFolder(folder, depth)
+
+const createBatchRun = async (config: {
+  folder: string
+  depth: number
+  oraOptions: OraOptions
+  onProcess: (context: {
+    currentAlbum: string
+    workingDir: string
+    spinner: Ora
+    index: number
+  }) => Promise<void>
+}) => {
+  const { folder, depth, oraOptions, onProcess } = config
+  const albums = await readFolder(folder, depth)
   const albumCount = albums.length
-  const { CliTagger } = await import('./tagger')
   const { default: ora } = await import('ora')
   for (let index = 0; index < albumCount; index++) {
     try {
-      const album = getDefaultAlbumName(albums[index].name)
-      const spinner = ora({
-        text: '搜索中',
-        spinner: {
-          interval: 500,
-          frames: ['.  ', '.. ', '...']
-        }
-      }).start()
+      const album = await getDefaultAlbumName(albums[index].name)
+      const spinner = ora(oraOptions).start()
       spinner.prefixText = `[${album}] (${index + 1}/${albumCount})`
       log(`start processing album #${index + 1}`)
-      const tagger = new CliTagger(cliOptions, metadataConfig, spinner)
-      tagger.workingDir = albums[index].path
-      await tagger.run(album)
+      await onProcess({
+        currentAlbum: album,
+        workingDir: albums[index].path,
+        spinner,
+        index,
+      })
       log(`processed album #${index + 1}`)
     } catch (error) {
       log('batch error:', error.message)
@@ -43,4 +58,44 @@ export const runBatchTagger = async (folder: string, depth: number) => {
     }
   }
   process.exit()
+}
+
+export const runBatchTagger = async (folder: string, depth: number) => {
+  const { CliTagger } = await import('./tagger')
+  await createBatchRun({
+    folder,
+    depth,
+    oraOptions: {
+      text: '搜索中',
+      spinner: {
+        interval: 500,
+        frames: ['.  ', '.. ', '...'],
+      },
+    },
+    onProcess: async ({ currentAlbum, workingDir, spinner }) => {
+      const tagger = new CliTagger(spinner)
+      tagger.workingDir = workingDir
+      await tagger.run(currentAlbum)
+    },
+  })
+}
+export const runBatchDump = async (folder: string, depth: number) => {
+  const { CliDumper } = await import('./dumper')
+  await createBatchRun({
+    folder,
+    depth,
+    oraOptions: {
+      text: '提取中',
+      spinner: {
+        interval: 500,
+        frames: ['.  ', '.. ', '...'],
+      },
+    },
+    onProcess: async ({ workingDir, spinner }) => {
+      const tagger = new CliDumper()
+      tagger.workingDir = workingDir
+      await tagger.run()
+      spinner.stop()
+    },
+  })
 }

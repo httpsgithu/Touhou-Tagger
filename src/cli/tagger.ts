@@ -1,11 +1,15 @@
-import { readdirSync, readFileSync, writeFileSync } from 'fs'
 import { Ora } from 'ora'
-import { extname, resolve } from 'path'
+import { extname, resolve as resolvePath } from 'path'
+import { readFile, readdir, rename, writeFile } from 'fs/promises'
 import { Metadata, MetadataSource } from '../core'
 import { MetadataConfig } from '../core/core-config'
 import { log } from '../core/debug'
-import { CliOptions } from './options'
+import { getMetadataConfig } from './options'
 import { readline } from '../core/readline'
+import { CliCommandBase } from './command-base'
+import { getDefaultAlbumName } from './default-album-name'
+import { setAlbumOptions } from './album-options'
+import { asyncFlatMap } from './helper'
 
 const leadingNumberSort = (a: string, b: string) => {
   const infinityPrase = (str: string) => {
@@ -24,65 +28,69 @@ const leadingNumberSort = (a: string, b: string) => {
   return intCompare
 }
 const TimeoutError = Symbol('timeout')
-export class CliTagger {
-  workingDir = '.'
+export class CliTagger extends CliCommandBase {
   metadataSource: MetadataSource
-  constructor(
-    public cliOptions: CliOptions,
-    public metadataConfig: MetadataConfig,
-    public spinner: Ora,
-  ) {}
+  metadataConfig: MetadataConfig
+  constructor(public spinner: Ora) {
+    super()
+    this.metadataConfig = getMetadataConfig(this.options)
+  }
   async getLocalCover() {
-    const localCoverFiles = readdirSync(this.workingDir, { withFileTypes: true })
+    const localCoverFiles = (await readdir(this.workingDir, { withFileTypes: true }))
       .filter(f => f.isFile() && f.name.match(/^cover\.(jpg|jpeg|jpe|tif|tiff|bmp|png)$/))
       .map(f => f.name)
     if (localCoverFiles.length === 0) {
       return undefined
     }
     const [coverFile] = localCoverFiles
-    const buffer = readFileSync(resolve(this.workingDir, coverFile))
+    const buffer = await readFile(resolvePath(this.workingDir, coverFile))
     return buffer
   }
   async getLocalJson() {
-    const localMetadataFiles = readdirSync(this.workingDir, { withFileTypes: true })
+    const localMetadataFiles = (await readdir(this.workingDir, { withFileTypes: true }))
       .filter(f => f.isFile() && f.name.match(/^metadata\.jsonc?$/))
       .map(f => f.name)
     if (localMetadataFiles.length === 0) {
       return undefined
     }
     const [localMetadata] = localMetadataFiles
-    const json = readFileSync(resolve(this.workingDir, localMetadata), { encoding: 'utf8' })
+    const json = await readFile(resolvePath(this.workingDir, localMetadata), { encoding: 'utf8' })
     log('localJson get')
     log(json)
-    const { localJson } = await import('../core/metadata/local-json/local-json')
-    return localJson.normalize((JSON.parse(json) as Metadata[]), await this.getLocalCover())
+    const { expandMetadataInfo: normalize } = await import('../core/metadata/normalize/normalize')
+    return normalize({
+      metadatas: JSON.parse(json) as Metadata[],
+      cover: await this.getLocalCover(),
+    })
   }
   async downloadMetadata(album: string, cover?: Buffer) {
     const { sourceMappings } = await import(`../core/metadata/source-mappings`)
-    const metadataSource = sourceMappings[this.cliOptions.source]
+    const metadataSource = sourceMappings[this.options.source]
     metadataSource.config = this.metadataConfig
     this.metadataSource = metadataSource
-    return await this.metadataSource.getMetadata(album, cover)
+    return this.metadataSource.getMetadata(album, cover)
   }
   async createFiles(metadata: Metadata[]) {
-    const { readdirSync, renameSync } = await import('fs')
     const { dirname } = await import('path')
     const { writerMappings } = await import('../core/writer/writer-mappings')
     const fileTypes = Object.keys(writerMappings)
     const fileTypeFilter = (file: string) => fileTypes.some(type => file.endsWith(type))
-    const dir = readdirSync(this.workingDir).sort(leadingNumberSort)
-    const discFiles = dir
-      .filter(f => f.match(/^Disc (\d+)/))
-      .flatMap(f => readdirSync(resolve(this.workingDir, f))
-        .sort(leadingNumberSort)
-        .map(inner => `${f}/${inner}`)
+    const dir = (await readdir(this.workingDir)).sort(leadingNumberSort)
+    const discFiles = (
+      await asyncFlatMap(
+        dir.filter(f => f.match(/^Disc (\d+)/)),
+        async f => {
+          return (await readdir(resolvePath(this.workingDir, f)))
+            .sort(leadingNumberSort)
+            .map(inner => `${f}/${inner}`)
+        },
       )
-      .filter(fileTypeFilter)
+    ).filter(fileTypeFilter)
     const files = dir
       .filter(fileTypeFilter)
       .concat(discFiles)
       .slice(0, metadata.length)
-      .map(f => resolve(this.workingDir, f))
+      .map(f => resolvePath(this.workingDir, f))
     if (files.length === 0) {
       const message = '未找到任何支持的音乐文件.'
       this.spinner.fail(message)
@@ -90,13 +98,17 @@ export class CliTagger {
     }
     const targetFiles = files.map((file, index) => {
       const maxLength = Math.max(Math.trunc(Math.log10(metadata.length)) + 1, 2)
-      const filename = `${metadata[index].trackNumber.padStart(maxLength, '0')} ${metadata[index].title}${extname(file)}`.replace(/[\/\\:\*\?"<>\|]/g, '')
-      return resolve(dirname(file), filename)
+      const filename = `${metadata[index].trackNumber.padStart(maxLength, '0')} ${
+        metadata[index].title
+      }${extname(file)}`.replace(/[/\\:*?"<>|]/g, '')
+      return resolvePath(dirname(file), filename)
     })
     log(files, targetFiles)
-    files.forEach((file, index) => {
-      renameSync(file, targetFiles[index])
-    })
+    await Promise.all(
+      files.map((file, index) => {
+        return rename(file, targetFiles[index])
+      }),
+    )
     return targetFiles
   }
   async writeMetadataToFile(metadata: Metadata[], targetFiles: string[]) {
@@ -108,8 +120,8 @@ export class CliTagger {
       const writer = writerMappings[type]
       writer.config = this.metadataConfig
       await writer.write(metadata[i], file)
-      if (this.cliOptions.lyric && this.cliOptions['lyric-output'] === 'lrc' && metadata[i].lyric) {
-        writeFileSync(file.substring(0, file.lastIndexOf(type)) + '.lrc', metadata[i].lyric)
+      if (this.options.lyric && this.options['lyric-output'] === 'lrc' && metadata[i].lyric) {
+        await writeFile(`${file.substring(0, file.lastIndexOf(type))}.lrc`, metadata[i].lyric)
       }
     }
     // FLAC 那个库放 Promise.all 里就只有最后一个会运行???
@@ -119,36 +131,38 @@ export class CliTagger {
     //   return writerMappings[type].write(metadata[index], file)
     // }))
     const coverBuffer = metadata[0].coverImage
-    if (this.cliOptions.cover && coverBuffer) {
+    if (this.options.cover && coverBuffer) {
       const { default: imageType } = await import('image-type')
       const type = imageType(coverBuffer)
       if (type !== null) {
-        const coverFilename = resolve(this.workingDir, `cover.${type.ext}`)
+        const coverFilename = resolvePath(this.workingDir, `cover.${type.ext}`)
         log('cover file', coverFilename)
-        writeFileSync(coverFilename, coverBuffer)
+        await writeFile(coverFilename, coverBuffer)
       }
     }
   }
   async withRetry<T>(action: () => Promise<T>) {
     let retryCount = 0
-    while (retryCount < this.cliOptions.retry) {
+    while (retryCount < this.options.retry) {
       try {
         const result = await Promise.race([
           action(),
-          new Promise<T>((_, reject) => setTimeout(() => reject(TimeoutError), this.cliOptions.timeout * 1000)),
+          new Promise<T>((resolve, reject) => {
+            setTimeout(() => reject(TimeoutError), this.options.timeout * 1000)
+          }),
         ])
         return result
       } catch (error) {
-        retryCount++
+        retryCount += 1
         const reason = (() => {
           if (error === TimeoutError) {
-            return `操作超时(${this.cliOptions.timeout}秒)`
+            return `操作超时(${this.options.timeout}秒)`
           }
           if (!error) {
             return '发生未知错误'
           }
-          if (error.message) {
-            return error.message
+          if (error.stack) {
+            return error.stack
           }
           return error.toString()
         })()
@@ -156,7 +170,7 @@ export class CliTagger {
         if (reason.stack) {
           log(`\n${reason.stack}`)
         }
-        if (retryCount < this.cliOptions.retry) {
+        if (retryCount < this.options.retry) {
           this.spinner.fail(`${reason}, 进行第${retryCount}次重试...`)
         } else {
           throw new Error(reason)
@@ -167,25 +181,32 @@ export class CliTagger {
   }
   async fetchMetadata(album: string) {
     return this.withRetry(async () => {
-      const batch = this.cliOptions.batch
+      const { batch } = this.options
       this.spinner.start(batch ? '下载专辑信息中' : `下载专辑信息中: ${album}`)
       const localCover = await this.getLocalCover()
       const localJson = await this.getLocalJson()
-      const metadata = localJson || await this.downloadMetadata(album, localCover)
+      const metadata = localJson || (await this.downloadMetadata(album, localCover))
       log('final metadata', metadata)
       this.spinner.text = '创建文件中'
       const targetFiles = await this.createFiles(metadata)
       this.spinner.text = '写入专辑信息中'
       await this.writeMetadataToFile(metadata, targetFiles)
+      const defaultAlbumName = await getDefaultAlbumName(this.workingDir)
+      if (album !== defaultAlbumName && !localJson) {
+        await setAlbumOptions(this.workingDir, {
+          defaultAlbumHint: album,
+        })
+      }
       this.spinner.succeed(batch ? '成功写入了专辑信息' : `成功写入了专辑信息: ${album}`)
     })
   }
   async run(album: string) {
+    await this.loadAlbumOptions()
     const { sourceMappings } = await import(`../core/metadata/source-mappings`)
-    const metadataSource = sourceMappings[this.cliOptions.source]
-    const noInteractive = this.cliOptions['no-interactive']
+    const metadataSource = sourceMappings[this.options.source]
+    const noInteractive = this.options['no-interactive']
     if (!metadataSource) {
-      const message = `未找到与'${this.cliOptions.source}'相关联的数据源.`
+      const message = `未找到与'${this.options.source}'相关联的数据源.`
       this.spinner.fail(message)
       throw new Error(message)
     }
